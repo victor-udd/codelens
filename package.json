@@ -1,0 +1,50 @@
+{
+  "name": "codelens",
+  "version": "0.1.0",
+  "description": "AI-assisted code review and evaluation API built with Node.js",
+  "main": "src/server.js",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/server.js",
+    "dev": "node --env-file-if-exists=.env --watch src/server.js",
+    "test": "node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run",
+    "test:watch": "node --env-file-if-exists=.env node_modules/vitest/vitest.mjs",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:status": "prisma migrate status",
+    "db:studio": "prisma studio"
+  },
+  "engines": {
+    "node": ">=22.9.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/victor-udd/codelens.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/victor-udd/codelens/issues"
+  },
+  "homepage": "https://github.com/victor-udd/codelens#readme",
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "express": "^5.3.0",
+    "pino": "^10.4.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "prisma": "^6.19.3",
+    "supertest": "^7.3.2",
+    "vitest": "^3.2.4"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "@prisma/client@6.19.3": true,
+    "prisma@6.19.3": true,
+    "@prisma/engines@6.19.3": true
+  }
+}

@@ -1,0 +1,112 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ReviewStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum SourceType {
+  SNIPPET
+  DIFF
+}
+
+enum SupportedLanguage {
+  JAVASCRIPT
+  TYPESCRIPT
+  PYTHON
+  GO
+}
+
+enum FindingSource {
+  STATIC
+  AI
+}
+
+enum Severity {
+  INFO
+  WARNING
+  ERROR
+  CRITICAL
+}
+
+enum Category {
+  SECURITY
+  BUG
+  PERFORMANCE
+  STYLE
+  MAINTAINABILITY
+}
+
+/// A submitted review request. Submitted source code is never persisted here.
+/// Findings and result describe only the latest completed attempt; retries clear prior artifacts.
+model Review {
+  id                  String            @id @default(uuid()) @db.Uuid
+  status              ReviewStatus      @default(PENDING)
+  sourceType          SourceType
+  language            SupportedLanguage
+  /// Must be greater than zero (database CHECK constraint).
+  sourceSizeBytes     Int
+  options             Json?
+  provider            String?
+  model               String?
+  /// Number of processing attempts started; must be non-negative (database CHECK constraint).
+  attemptCount        Int               @default(0)
+  processingStartedAt DateTime?
+  errorCode           String?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  /// Authoritative terminal timestamp: set when status becomes COMPLETED or FAILED, null otherwise.
+  completedAt         DateTime?
+
+  findings Finding[]
+  result   ReviewResult?
+
+  @@index([status, createdAt])
+  @@index([status, processingStartedAt])
+  @@index([createdAt, id])
+}
+
+/// Structured outcome of the latest completed review attempt.
+/// Severity counts are derived from Review.findings rather than stored here.
+model ReviewResult {
+  id         String   @id @default(cuid())
+  reviewId   String   @unique @db.Uuid
+  review     Review   @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  summary    String
+  latencyMs  Int?
+  tokenUsage Json?
+  createdAt  DateTime @default(now())
+}
+
+/// A single static or AI-generated finding belonging to a review.
+/// STATIC and AI findings share the same Review; neither has a separate parent.
+model Finding {
+  id           String        @id @default(cuid())
+  reviewId     String        @db.Uuid
+  review       Review        @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  source       FindingSource
+  severity     Severity
+  category     Category
+  title        String
+  explanation  String
+  suggestedFix String?
+  filePath     String?
+  /// Positive when present (database CHECK constraint).
+  lineStart    Int?
+  /// Positive when present and not before lineStart (database CHECK constraints).
+  lineEnd      Int?
+  metadata     Json?
+  createdAt    DateTime      @default(now())
+
+  @@index([reviewId])
+  @@index([reviewId, severity])
+}
