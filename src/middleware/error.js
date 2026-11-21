@@ -20,7 +20,9 @@ export function notFound(req, res) {
 
 export function errorHandler(err, req, res, _next) {
   const status = Number.isInteger(err.status) ? err.status : 500;
-  const code = safeCode(err, status);
+  const malformedJson = err.type === 'entity.parse.failed';
+  const code = malformedJson ? 'VALIDATION_ERROR' : safeCode(err, status);
+  const details = Array.isArray(err.details) ? err.details : undefined;
 
   if (status >= 500) {
     logger.error({ requestTag: requestTag(req), err }, 'request failed');
@@ -31,7 +33,9 @@ export function errorHandler(err, req, res, _next) {
   res.status(status).json({
     error: {
       code,
-      message: status >= 500 ? 'Internal server error' : err.message,
+      message:
+        status >= 500 ? 'Internal server error' : err.message,
+      ...(details ? { details } : {}),
       requestId: req.requestId,
     },
   });
