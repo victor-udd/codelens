@@ -45,6 +45,19 @@ export const reviewSubmissionSchema = z
 // Alias for callers that name the operation after the resource being created.
 export const createReviewSchema = reviewSubmissionSchema;
 
+export const reviewIdParamSchema = z
+  .object({
+    id: z.string().uuid('id must be a valid UUID'),
+  })
+  .strict();
+
+export const reviewListQuerySchema = z
+  .object({
+    page: z.coerce.number().int().positive().default(1),
+    limit: z.coerce.number().int().positive().max(100).default(20),
+  })
+  .strict();
+
 export function parseReviewSubmission(input) {
   const result = reviewSubmissionSchema.safeParse(input);
 

@@ -56,7 +56,7 @@ export function createOpenAICompatibleProvider({
     name: 'openai-compatible',
     model,
 
-    async generate({ systemPrompt, userPayload }) {
+    async generate({ systemPrompt, userPayload, idempotencyKey }) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       let response;
@@ -67,6 +67,9 @@ export function createOpenAICompatibleProvider({
           headers: {
             Authorization: `Bearer ${apiKey}`,
             'Content-Type': 'application/json',
+            ...(idempotencyKey
+              ? { 'Idempotency-Key': idempotencyKey }
+              : {}),
           },
           body: JSON.stringify({
             model,

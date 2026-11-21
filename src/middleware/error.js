@@ -23,9 +23,23 @@ export function errorHandler(err, req, res, _next) {
   const malformedJson = err.type === 'entity.parse.failed';
   const code = malformedJson ? 'VALIDATION_ERROR' : safeCode(err, status);
   const details = Array.isArray(err.details) ? err.details : undefined;
+  const expectedFailure = err.name === 'ReviewProcessingError';
+  const message =
+    status >= 500 && !expectedFailure ? 'Internal server error' : err.message;
 
   if (status >= 500) {
-    logger.error({ requestTag: requestTag(req), err }, 'request failed');
+    logger.error(
+      {
+        requestTag: requestTag(req),
+        ...(expectedFailure
+          ? {
+              code,
+              ...(err.reviewId ? { reviewId: err.reviewId } : {}),
+            }
+          : { err }),
+      },
+      'request failed',
+    );
   } else {
     logger.warn({ requestTag: requestTag(req), code }, 'request rejected');
   }
@@ -33,9 +47,9 @@ export function errorHandler(err, req, res, _next) {
   res.status(status).json({
     error: {
       code,
-      message:
-        status >= 500 ? 'Internal server error' : err.message,
+      message,
       ...(details ? { details } : {}),
+      ...(err.reviewId ? { reviewId: err.reviewId } : {}),
       requestId: req.requestId,
     },
   });

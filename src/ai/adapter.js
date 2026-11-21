@@ -20,6 +20,7 @@ const aiReviewRequestSchema = z
     content: z.string().min(1),
     language: z.enum(Object.values(SupportedLanguage)),
     sourceType: z.enum(Object.values(SourceType)).optional(),
+    idempotencyKey: z.string().min(1).max(200).optional(),
   })
   .passthrough();
 
@@ -71,8 +72,12 @@ export function createReviewAIAdapter(options = {}) {
         );
       }
 
-      const { content, language, sourceType = SourceType.SNIPPET } =
-        request.data;
+      const {
+        content,
+        language,
+        sourceType = SourceType.SNIPPET,
+        idempotencyKey,
+      } = request.data;
       const { content: safeContent, redactions } = redactSecrets(content);
       const userPayload = buildUserPayload({
         language,
@@ -87,6 +92,7 @@ export function createReviewAIAdapter(options = {}) {
           rawResponse = await provider.generate({
             systemPrompt: AI_SYSTEM_PROMPT,
             userPayload,
+            idempotencyKey,
           });
           break;
         } catch (error) {
