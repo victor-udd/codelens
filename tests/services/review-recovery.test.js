@@ -243,6 +243,111 @@ describe('review recovery', () => {
     expect(JSON.stringify(outcome)).not.toContain('forced completeReview failure');
   });
 
+  it('drops stale artifacts when a later PROCESSING attempt fails', async () => {
+    const clock = clockFrom();
+    const repository = new FakeReviewRepository({ now: clock.now });
+    const service = createReviewProcessingService({
+      repository,
+      aiAdapter: createFakeAIAdapter({
+        findings: [
+          {
+            severity: 'INFO',
+            category: 'STYLE',
+            title: 'Old finding',
+            explanation: 'From the previous attempt.',
+            suggestedFix: null,
+            filePath: null,
+            lineStart: null,
+            lineEnd: null,
+          },
+        ],
+      }),
+      now: clock.now,
+    });
+
+    const completed = await service.processSubmission(submission());
+    expect(completed.status).toBe('COMPLETED');
+    expect(await repository.findReviewById(completed.reviewId)).toMatchObject({
+      findings: [expect.objectContaining({ title: 'Old finding' })],
+      result: expect.objectContaining({ summary: 'Review completed with 1 finding(s): 0 static, 1 AI.' }),
+    });
+
+    // Simulate a recovery claim that owns the review while old artifacts are
+    // still attached, then fail that claim terminal.
+    const claim = repository.setReviewState(completed.reviewId, {
+      status: 'PROCESSING',
+      processingStartedAt: new Date(clock.now().getTime() + 1000),
+    });
+    const outcome = await service.markTerminalFailure(
+      completed.reviewId,
+      'STALE_RECOVERY_FAILED',
+      claim,
+    );
+
+    expect(outcome.status).toBe('FAILED');
+    expect(outcome.findings).toEqual([]);
+    expect(outcome.result).toBeNull();
+    expect(await repository.findReviewById(completed.reviewId)).toMatchObject({
+      status: 'FAILED',
+      findings: [],
+      result: null,
+    });
+  });
+
+  it('drops stale artifacts when an interrupted review is reclaimed', async () => {
+    const clock = clockFrom();
+    const repository = new FakeReviewRepository({ now: clock.now });
+    const id = await createInterruptedReview(repository, clock);
+    await repository.completeReview(id, {
+      findings: [
+        {
+          source: 'STATIC',
+          severity: 'INFO',
+          category: 'STYLE',
+          title: 'Old finding',
+          explanation: 'From the interrupted attempt.',
+          suggestedFix: null,
+          filePath: null,
+          lineStart: null,
+          lineEnd: null,
+          metadata: null,
+        },
+      ],
+      summary: 'Old summary',
+      latencyMs: 1,
+      tokenUsage: null,
+      completedAt: clock.now(),
+      expectedProcessingStartedAt: repository.get(id).processingStartedAt,
+    });
+    repository.setReviewState(id, { status: 'COMPLETED' });
+    clock.advance(STALE_PROCESSING_MS + 1000);
+
+    const recovery = createReviewRecoveryService({
+      repository,
+      aiAdapter: createFakeAIAdapter(),
+      sourceLoader: async () => null,
+      now: clock.now,
+      staleProcessingMs: STALE_PROCESSING_MS,
+      stalePendingMs: STALE_PENDING_MS,
+      maxAttempts: MAX_ATTEMPTS,
+    });
+
+    // A COMPLETED review is not stale, so force a PROCESSING state with the
+    // artifacts left behind by the previous attempt.
+    repository.setReviewState(id, {
+      status: 'PROCESSING',
+      processingStartedAt: new Date(START),
+    });
+    const outcome = await recovery.recoverReview(id);
+
+    expect(outcome.status).toBe('FAILED');
+    expect(outcome.errorCode).toBe('STALE_RECOVERY_SOURCE_UNAVAILABLE');
+    expect(outcome.findings).toEqual([]);
+    const stored = await repository.findReviewById(id);
+    expect(stored.findings).toEqual([]);
+    expect(stored.result).toBeNull();
+  });
+
   it('fails safely when recovered source cannot be supplied', async () => {
     const clock = clockFrom();
     const repository = new FakeReviewRepository({ now: clock.now });

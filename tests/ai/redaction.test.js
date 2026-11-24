@@ -49,6 +49,65 @@ describe('AI source redaction', () => {
     expect(result.content.split('\n')).toHaveLength(3);
   });
 
+  it('redacts credentials stored under quoted JSON-style keys', () => {
+    const source = '{"apiKey":"abcdef123456","other":1}';
+
+    const result = redactSecrets(source);
+
+    expect(result.content).toBe('{"apiKey":"[REDACTED]","other":1}');
+    expect(result.redactions).toBe(1);
+  });
+
+  it('redacts quoted object keys in configuration assignments', () => {
+    const source = 'const config = {"password":"hunter2secret"};';
+
+    const result = redactSecrets(source);
+
+    expect(result.content).toBe('const config = {"password":"[REDACTED]"};');
+    expect(result.redactions).toBe(1);
+  });
+
+  it('redacts bare ambiguous credential assignments', () => {
+    const result = redactSecrets('const k = abcdef123456');
+
+    expect(result.content).toBe('const k = [REDACTED]');
+    expect(result.redactions).toBe(1);
+  });
+
+  it('normalizes key spellings and supports templates and config formats', () => {
+    const source = [
+      'API_KEY: "abcdef123456"',
+      "client-secret = 'hunter2secret'",
+      'const authToken = `abcdefghijklmnop`',
+    ].join('\n');
+
+    const result = redactSecrets(source);
+
+    expect(result.content).toBe(
+      [
+        'API_KEY: "[REDACTED]"',
+        "client-secret = '[REDACTED]'",
+        'const authToken = `[REDACTED]`',
+      ].join('\n'),
+    );
+    expect(result.redactions).toBe(3);
+  });
+
+  it('leaves ordinary values and non-credential keys unchanged', () => {
+    const source = [
+      'const message = "eval(userInput)";',
+      'const token = process.env.TOKEN;',
+      'const count = 123456;',
+      'const label = "apiKey";',
+      'const author = "abcdef123456";',
+    ].join('\n');
+
+    const result = redactSecrets(source);
+
+    expect(result.content).toBe(source);
+    expect(result.redactions).toBe(0);
+  });
+
   it('handles empty and non-string input', () => {
     expect(redactSecrets('')).toEqual({ content: '', redactions: 0 });
     expect(redactSecrets(undefined)).toEqual({ content: '', redactions: 0 });

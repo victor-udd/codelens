@@ -1,7 +1,7 @@
 import { Category, Severity } from '@prisma/client';
 
 const SENSITIVE_KEY =
-  /(?:password|passwd|pwd|secret|token|api[-_]?key|private[-_]?key|access[-_]?key|credentials?|client[-_]?secret|session[-_]?key|encryption[-_]?key|auth(?:orization)?)/i;
+  /(?:^|[_.-])(?:password|passwd|pwd|secret|token|api[-_]?key|private[-_]?key|access[-_]?key|credentials?|client[-_]?secret|session[-_]?key|encryption[-_]?key|auth(?:orization)?)(?=$|[_.-]|\d)/i;
 
 export const KNOWN_SECRET_PREFIX =
   /(?:sk_live_|rk_live_|gh[pousr]_|github_pat_|xox[baprs]-|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{20,})/;
@@ -12,6 +12,16 @@ export const KNOWN_SECRET_TOKEN =
 
 const PLACEHOLDER =
   /^(?:test|testing|example|sample|demo|placeholder|dummy|fake|redacted|change[-_]?me|your[-_]?[\w-]+|xxx+|\*+|<[^>]+>|\$\{[^}]+\}|null|undefined|true|false)$/i;
+
+// Normalizes camelCase, snake_case, kebab-case and case variants so all
+// credential-key spellings are tested against the same sensitive-key pattern.
+export function normalizeKey(key) {
+  return String(key ?? '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[^A-Za-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toLowerCase();
+}
 
 function looksLikePlaceholder(value) {
   if (PLACEHOLDER.test(value)) {
@@ -25,13 +35,17 @@ function looksLikePlaceholder(value) {
   return /^(.)\1+$/.test(value);
 }
 
-export function assignedKey(masked, start) {
-  const before = masked.slice(Math.max(0, start - 200), start).replace(/\s+$/, '');
+export function assignedKey(source, start, masked = source) {
+  const from = Math.max(0, start - 200);
+  // The lexer blanks quoted keys, so recover them from the original source.
+  const beforeSource = source.slice(from, start);
+  const beforeCode = masked.slice(from, start);
+  const quotedProperty = /(?:['"`])([\w$.-]+)['"`]\s*:\s*$/.exec(beforeSource);
   const assignment =
-    /([\w$.]+)\s*(?::\s*[\w<>[\]|]+\s*)?=\s*$/.exec(before);
-  const property = /([\w$.]+)\s*:\s*$/.exec(before);
+    /([\w$.]+)\s*(?::\s*[\w<>[\]|]+\s*)?=\s*$/.exec(beforeCode);
+  const property = /([\w$.]+)\s*:\s*$/.exec(beforeCode);
 
-  return assignment?.[1] ?? property?.[1] ?? '';
+  return quotedProperty?.[1] ?? assignment?.[1] ?? property?.[1] ?? '';
 }
 
 export function isSuspiciousValue(value, key) {
@@ -49,16 +63,18 @@ export function isSuspiciousValue(value, key) {
     return false;
   }
 
-  if (key && trimmed.toLowerCase() === key.split('.').pop().toLowerCase()) {
+  const normalizedKey = normalizeKey(key);
+
+  if (key && trimmed.toLowerCase() === normalizedKey.split('_').pop()) {
     return false;
   }
 
-  return SENSITIVE_KEY.test(key);
+  return SENSITIVE_KEY.test(normalizedKey);
 }
 
 // Shared by the static rule and the AI redactor so both agree on what counts
 // as a credential.
-export function findCredentialLiterals({ masked, strings }) {
+export function findCredentialLiterals({ source = '', masked, strings }) {
   const seen = new Set();
   const credentials = [];
 
@@ -67,7 +83,7 @@ export function findCredentialLiterals({ masked, strings }) {
       continue;
     }
 
-    const key = assignedKey(masked, literal.start);
+    const key = assignedKey(source, literal.start, masked);
 
     if (!isSuspiciousValue(literal.value, key)) {
       continue;

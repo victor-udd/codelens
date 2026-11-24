@@ -7,6 +7,25 @@ import { createReviewProcessingService } from '../src/services/review-processing
 import { createFakeAIAdapter } from './helpers/fake-ai-adapter.js';
 import { FakeReviewRepository } from './helpers/fake-review-repository.js';
 
+const USER_KEY = 'test-user-key';
+const ADMIN_KEY = 'test-admin-key';
+
+function withKey(app, key) {
+  const http = request(app);
+  return {
+    get: (path) => http.get(path).set('x-api-key', key),
+    post: (path) => http.post(path).set('x-api-key', key),
+  };
+}
+
+function authed(app) {
+  return withKey(app, USER_KEY);
+}
+
+function admin(app) {
+  return withKey(app, ADMIN_KEY);
+}
+
 const sourceWithIssues = [
   'const apiKey = "abcdef123456";',
   'eval(userInput);',
@@ -48,7 +67,7 @@ describe('review HTTP API', () => {
     });
     const app = createApp({ repository, aiAdapter });
 
-    const response = await request(app)
+    const response = await authed(app)
       .post('/api/reviews')
       .send(submission());
 
@@ -106,7 +125,7 @@ describe('review HTTP API', () => {
     const aiAdapter = createFakeAIAdapter();
     const app = createApp({ repository, aiAdapter });
 
-    const response = await request(app)
+    const response = await authed(app)
       .post('/api/reviews')
       .send(submission('', { language: 'RUST' }));
 
@@ -129,8 +148,8 @@ describe('review HTTP API', () => {
     const service = createReviewProcessingService({ repository, aiAdapter });
     const app = createApp({ reviewService: service });
 
-    const created = await request(app).post('/api/reviews').send(submission());
-    const response = await request(app).get(
+    const created = await authed(app).post('/api/reviews').send(submission());
+    const response = await authed(app).get(
       `/api/reviews/${created.body.id}`,
     );
 
@@ -150,7 +169,7 @@ describe('review HTTP API', () => {
       aiAdapter: createFakeAIAdapter(),
     });
 
-    const response = await request(app).get(`/api/reviews/${randomUUID()}`);
+    const response = await authed(app).get(`/api/reviews/${randomUUID()}`);
 
     expect(response.status).toBe(404);
     expect(response.body.error).toMatchObject({
@@ -166,7 +185,7 @@ describe('review HTTP API', () => {
       aiAdapter: createFakeAIAdapter(),
     });
 
-    const response = await request(app).get('/api/reviews/not-a-uuid');
+    const response = await authed(app).get('/api/reviews/not-a-uuid');
 
     expect(response.status).toBe(400);
     expect(response.body.error).toMatchObject({
@@ -198,7 +217,7 @@ describe('review HTTP API', () => {
     }
 
     const app = createApp({ reviewService: service });
-    const page = await request(app).get('/api/reviews?page=2&limit=2');
+    const page = await admin(app).get('/api/reviews?page=2&limit=2');
 
     expect(page.status).toBe(200);
     expect(page.body.data).toHaveLength(1);
@@ -211,7 +230,7 @@ describe('review HTTP API', () => {
     expect(page.body.data[0]).not.toHaveProperty('content');
 
     for (const query of ['page=0', 'limit=101', 'offset=1']) {
-      const invalid = await request(app).get(`/api/reviews?${query}`);
+      const invalid = await admin(app).get(`/api/reviews?${query}`);
       expect(invalid.status).toBe(400);
       expect(invalid.body.error.code).toBe('VALIDATION_ERROR');
     }
@@ -224,7 +243,7 @@ describe('review HTTP API', () => {
     });
     const app = createApp({ repository, aiAdapter });
 
-    const response = await request(app)
+    const response = await authed(app)
       .post('/api/reviews')
       .send(submission('const value = 1;'));
 
@@ -238,7 +257,7 @@ describe('review HTTP API', () => {
     expect(JSON.stringify(response.body)).not.toContain('sk-leak-999');
     expect(JSON.stringify(response.body)).not.toContain('rejected');
 
-    const stored = await request(app).get(
+    const stored = await authed(app).get(
       `/api/reviews/${response.body.error.reviewId}`,
     );
     expect(stored.status).toBe(200);

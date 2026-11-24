@@ -166,24 +166,33 @@ export function createReviewRepository(client = prisma) {
       id,
       { errorCode, completedAt, expectedProcessingStartedAt },
     ) {
-      const where = {
-        id,
-        status: { in: [ReviewStatus.PENDING, ReviewStatus.PROCESSING] },
-      };
+      // A claim-less failure belongs to the original PENDING attempt. Once a
+      // review is PROCESSING, only the worker holding that claim may fail it.
+      const where = expectedProcessingStartedAt
+        ? {
+            id,
+            status: ReviewStatus.PROCESSING,
+            processingStartedAt: expectedProcessingStartedAt,
+          }
+        : { id, status: ReviewStatus.PENDING };
 
-      if (expectedProcessingStartedAt) {
-        where.processingStartedAt = expectedProcessingStartedAt;
-      }
+      return client.$transaction(async (tx) => {
+        const updated = await tx.review.updateMany({
+          where,
+          data: { status: ReviewStatus.FAILED, errorCode, completedAt },
+        });
 
-      const updated = await client.review.updateMany({
-        where,
-        data: { status: ReviewStatus.FAILED, errorCode, completedAt },
+        // Only the claim winner may replace artifacts from an earlier attempt.
+        if (updated.count === 1) {
+          await tx.finding.deleteMany({ where: { reviewId: id } });
+          await tx.reviewResult.deleteMany({ where: { reviewId: id } });
+        }
+
+        return {
+          count: updated.count,
+          review: await tx.review.findUnique({ where: { id } }),
+        };
       });
-
-      return {
-        count: updated.count,
-        review: await client.review.findUnique({ where: { id } }),
-      };
     },
 
     async findReviewById(id) {
@@ -247,26 +256,33 @@ export function createReviewRepository(client = prisma) {
         where.AND = [{ attemptCount: { lt: maxAttempts } }];
       }
 
-      const updated = await client.review.updateMany({
-        where,
-        data: {
-          status: ReviewStatus.PROCESSING,
-          attemptCount: { increment: 1 },
-          processingStartedAt,
-          errorCode: null,
-          completedAt: null,
-          ...(provider ? { provider } : {}),
-          ...(model ? { model } : {}),
-        },
-      });
+      return client.$transaction(async (tx) => {
+        const updated = await tx.review.updateMany({
+          where,
+          data: {
+            status: ReviewStatus.PROCESSING,
+            attemptCount: { increment: 1 },
+            processingStartedAt,
+            errorCode: null,
+            completedAt: null,
+            ...(provider ? { provider } : {}),
+            ...(model ? { model } : {}),
+          },
+        });
 
-      if (updated.count !== 1) {
-        return null;
-      }
+        if (updated.count !== 1) {
+          return null;
+        }
 
-      return client.review.findUnique({
-        where: { id },
-        include: REVIEW_INCLUDE,
+        // The next attempt starts clean; findings from the interrupted run
+        // must not survive into a later COMPLETED or FAILED state.
+        await tx.finding.deleteMany({ where: { reviewId: id } });
+        await tx.reviewResult.deleteMany({ where: { reviewId: id } });
+
+        return tx.review.findUnique({
+          where: { id },
+          include: REVIEW_INCLUDE,
+        });
       });
     },
 

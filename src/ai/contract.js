@@ -29,14 +29,22 @@ export function buildUserPayload({ language, sourceType, source }) {
   });
 }
 
+export const AI_OUTPUT_LIMITS = Object.freeze({
+  findings: 100,
+  title: 200,
+  explanation: 4000,
+  suggestedFix: 2000,
+  filePath: 1000,
+});
+
 const aiFindingSchema = z
   .object({
     severity: z.enum(SEVERITIES),
     category: z.enum(CATEGORIES),
-    title: z.string().min(1).max(200),
-    explanation: z.string().min(1),
-    suggestedFix: z.string().min(1),
-    filePath: z.string().min(1).nullable(),
+    title: z.string().min(1).max(AI_OUTPUT_LIMITS.title),
+    explanation: z.string().min(1).max(AI_OUTPUT_LIMITS.explanation),
+    suggestedFix: z.string().min(1).max(AI_OUTPUT_LIMITS.suggestedFix),
+    filePath: z.string().min(1).max(AI_OUTPUT_LIMITS.filePath).nullable(),
     lineStart: z.number().int().positive().nullable(),
     lineEnd: z.number().int().positive().nullable(),
   })
@@ -50,5 +58,5 @@ const aiFindingSchema = z
   );
 
 export const aiFindingsResponseSchema = z
-  .object({ findings: z.array(aiFindingSchema).max(100) })
+  .object({ findings: z.array(aiFindingSchema).max(AI_OUTPUT_LIMITS.findings) })
   .strict();

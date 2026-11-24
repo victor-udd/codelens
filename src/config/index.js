@@ -19,6 +19,8 @@ const envSchema = z
     MAX_CONTENT_BYTES: z.coerce.number().int().positive().default(65536),
     PROVIDER_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
     MAX_PROVIDER_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
+    AI_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(4096),
+    AI_RESPONSE_MAX_BYTES: z.coerce.number().int().positive().default(1048576),
     MAX_PROCESSING_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
     STALE_PROCESSING_MS: z.coerce.number().int().positive().default(90000),
     STALE_PENDING_MS: z.coerce.number().int().positive().default(300000),
@@ -34,6 +36,33 @@ const envSchema = z
     ),
     AI_MODEL: z.string().min(1).default('gpt-4o-mini'),
     AI_BASE_URL: z.string().url().default('https://api.openai.com/v1'),
+
+    // Comma-separated API keys. Values are converted to hashes at the
+    // middleware boundary; raw keys are never logged or persisted.
+    API_KEYS: z
+      .string()
+      .min(1)
+      .transform((value) =>
+        value
+          .split(',')
+          .map((key) => key.trim())
+          .filter(Boolean),
+      )
+      .refine((keys) => keys.length > 0, {
+        message: 'API_KEYS must contain at least one key',
+      }),
+    ADMIN_API_KEYS: z
+      .string()
+      .optional()
+      .default('')
+      .transform((value) =>
+        value
+          .split(',')
+          .map((key) => key.trim())
+          .filter(Boolean),
+      ),
+    RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60000),
+    RATE_LIMIT_MAX: z.coerce.number().int().positive().default(60),
   })
   // A stale lease must outlast the longest synchronous provider retry window,
   // otherwise recovery could reclaim a request that is still in flight.

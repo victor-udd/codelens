@@ -20,6 +20,9 @@ jobs:
       DATABASE_URL: postgresql://codelens:test-only@127.0.0.1:5432/codelens_ci?schema=public
       # Empty -> AI_API_KEY is optional; tests use fake adapters/mocked fetch.
       AI_API_KEY: ''
+      # Throwaway keys for the HTTP auth/rate-limit test suites.
+      API_KEYS: 'test-user-key'
+      ADMIN_API_KEYS: 'test-admin-key'
 
     services:
       postgres:

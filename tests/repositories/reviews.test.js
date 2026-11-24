@@ -4,9 +4,13 @@ import {
   ReviewStateError,
 } from '../../src/repositories/reviews.js';
 
-function fakeClient({ failOnTx = [] } = {}) {
+function fakeClient({ failOnTx = [], updateCount = 1 } = {}) {
   const calls = [];
   const failedTx = new Set(failOnTx);
+  let nextUpdateCount = updateCount;
+  const setUpdateCount = (count) => {
+    nextUpdateCount = count;
+  };
   const tx = {
     finding: {
       deleteMany: vi.fn(async (args) => calls.push(['tx.finding.deleteMany', args])),
@@ -27,7 +31,7 @@ function fakeClient({ failOnTx = [] } = {}) {
     review: {
       updateMany: vi.fn(async (args) => {
         calls.push(['tx.review.updateMany', args]);
-        return { count: 1 };
+        return { count: nextUpdateCount };
       }),
       findUnique: vi.fn(async () => ({ id: 'review-1', status: 'COMPLETED' })),
     },
@@ -36,6 +40,7 @@ function fakeClient({ failOnTx = [] } = {}) {
   return {
     calls,
     tx,
+    setUpdateCount,
     client: {
       $transaction: vi.fn(async (callback) => {
         calls.push(['$transaction']);
@@ -232,11 +237,12 @@ describe('review repository', () => {
       completedAt: new Date('2026-01-03T00:00:00.000Z'),
     });
 
-    expect(calls[0][0]).toBe('review.updateMany');
-    expect(calls[0][1]).toMatchObject({
+    expect(calls[0][0]).toBe('$transaction');
+    expect(calls[1][0]).toBe('tx.review.updateMany');
+    expect(calls[1][1]).toMatchObject({
       where: {
         id: 'review-1',
-        status: { in: ['PENDING', 'PROCESSING'] },
+        status: 'PENDING',
       },
       data: {
         status: 'FAILED',
@@ -336,7 +342,11 @@ describe('review repository', () => {
   });
 
   it('atomically claims only eligible stale reviews', async () => {
-    const { client } = fakeClient();
+    const { client, tx, setUpdateCount } = fakeClient();
+    tx.review.findUnique.mockResolvedValue({
+      id: 'review-1',
+      status: 'PROCESSING',
+    });
     const repository = createReviewRepository(client);
     const bounds = {
       pendingBefore: new Date('2026-01-01T00:00:00.000Z'),
@@ -350,7 +360,7 @@ describe('review repository', () => {
     await expect(
       repository.claimStaleReview('review-1', bounds),
     ).resolves.toMatchObject({ id: 'review-1', status: 'PROCESSING' });
-    expect(client.review.updateMany).toHaveBeenCalledWith({
+    expect(tx.review.updateMany).toHaveBeenCalledWith({
       where: {
         OR: [
           {
@@ -377,9 +387,147 @@ describe('review repository', () => {
       },
     });
 
-    client.review.updateMany.mockResolvedValue({ count: 0 });
+    setUpdateCount(0);
     await expect(
       repository.claimStaleReview('review-1', bounds),
     ).resolves.toBeNull();
+  });
+
+  it('limits a claim-less failure write to a still-PENDING review', async () => {
+    const { client, calls } = fakeClient();
+    const repository = createReviewRepository(client);
+
+    await repository.failReview('review-1', {
+      errorCode: 'AI_TIMEOUT',
+      completedAt: new Date('2026-01-03T00:00:00.000Z'),
+    });
+
+    expect(calls[0][0]).toBe('$transaction');
+    expect(calls[1][0]).toBe('tx.review.updateMany');
+    expect(calls[1][1].where).toEqual({
+      id: 'review-1',
+      status: 'PENDING',
+    });
+  });
+
+  it('matches the processing claim token when failing a PROCESSING review', async () => {
+    const { client, calls } = fakeClient();
+    const repository = createReviewRepository(client);
+    const processingStartedAt = new Date('2026-01-01T00:00:00.000Z');
+
+    await repository.failReview('review-1', {
+      errorCode: 'AI_TIMEOUT',
+      completedAt: new Date('2026-01-03T00:00:00.000Z'),
+      expectedProcessingStartedAt: processingStartedAt,
+    });
+
+    expect(calls[0][0]).toBe('$transaction');
+    expect(calls[1][0]).toBe('tx.review.updateMany');
+    expect(calls[1][1].where).toEqual({
+      id: 'review-1',
+      status: 'PROCESSING',
+      processingStartedAt,
+    });
+  });
+
+  it('clears stale findings and result when a terminal failure commits', async () => {
+    const { client, calls, tx } = fakeClient();
+    const repository = createReviewRepository(client);
+    tx.review.findUnique.mockResolvedValue({
+      id: 'review-1',
+      status: 'FAILED',
+      findings: [],
+      result: null,
+    });
+
+    await repository.failReview('review-1', {
+      errorCode: 'AI_TIMEOUT',
+      completedAt: new Date('2026-01-03T00:00:00.000Z'),
+      expectedProcessingStartedAt: new Date('2026-01-01T00:00:00.000Z'),
+    });
+
+    expect(client.$transaction).toHaveBeenCalledTimes(1);
+    expect(calls.map(([name]) => name)).toEqual([
+      '$transaction',
+      'tx.review.updateMany',
+      'tx.finding.deleteMany',
+      'tx.reviewResult.deleteMany',
+    ]);
+    expect(tx.finding.deleteMany).toHaveBeenCalledWith({
+      where: { reviewId: 'review-1' },
+    });
+    expect(tx.reviewResult.deleteMany).toHaveBeenCalledWith({
+      where: { reviewId: 'review-1' },
+    });
+  });
+
+  it('does not clear artifacts when a stale failure loses the claim', async () => {
+    const { client, calls, tx, setUpdateCount } = fakeClient();
+    setUpdateCount(0);
+    const repository = createReviewRepository(client);
+
+    const outcome = await repository.failReview('review-1', {
+      errorCode: 'AI_TIMEOUT',
+      completedAt: new Date('2026-01-03T00:00:00.000Z'),
+    });
+
+    expect(outcome.count).toBe(0);
+    expect(calls.map(([name]) => name)).toEqual([
+      '$transaction',
+      'tx.review.updateMany',
+    ]);
+    expect(tx.finding.deleteMany).not.toHaveBeenCalled();
+    expect(tx.reviewResult.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('clears stale artifacts when a recovered claim succeeds', async () => {
+    const { client, calls, tx } = fakeClient();
+    const repository = createReviewRepository(client);
+    const bounds = {
+      pendingBefore: new Date('2026-01-01T00:00:00.000Z'),
+      processingBefore: new Date('2026-01-01T00:01:00.000Z'),
+      processingStartedAt: new Date('2026-01-01T00:02:00.000Z'),
+      provider: 'fake-provider',
+      model: 'fake-model',
+      maxAttempts: 3,
+    };
+
+    await repository.claimStaleReview('review-1', bounds);
+
+    expect(client.$transaction).toHaveBeenCalledTimes(1);
+    expect(calls.map(([name]) => name)).toEqual([
+      '$transaction',
+      'tx.review.updateMany',
+      'tx.finding.deleteMany',
+      'tx.reviewResult.deleteMany',
+    ]);
+    expect(tx.finding.deleteMany).toHaveBeenCalledWith({
+      where: { reviewId: 'review-1' },
+    });
+    expect(tx.reviewResult.deleteMany).toHaveBeenCalledWith({
+      where: { reviewId: 'review-1' },
+    });
+  });
+
+  it('does not clear artifacts when a stale recovery claim loses', async () => {
+    const { client, calls, tx, setUpdateCount } = fakeClient();
+    setUpdateCount(0);
+    const repository = createReviewRepository(client);
+
+    await expect(
+      repository.claimStaleReview('review-1', {
+        pendingBefore: new Date('2026-01-01T00:00:00.000Z'),
+        processingBefore: new Date('2026-01-01T00:01:00.000Z'),
+        processingStartedAt: new Date('2026-01-01T00:02:00.000Z'),
+        maxAttempts: 3,
+      }),
+    ).resolves.toBeNull();
+
+    expect(calls.map(([name]) => name)).toEqual([
+      '$transaction',
+      'tx.review.updateMany',
+    ]);
+    expect(tx.finding.deleteMany).not.toHaveBeenCalled();
+    expect(tx.reviewResult.deleteMany).not.toHaveBeenCalled();
   });
 });

@@ -125,6 +125,10 @@ a variable is absent.
 | `PORT` | no | `3000` | Listen port (1–65535) |
 | `LOG_LEVEL` | no | `info` | `fatal`, `error`, `warn`, `info`, `debug`, `trace` |
 | `DATABASE_URL` | **yes** | — | PostgreSQL URL; must start with `postgresql://`. The example points at the Compose database |
+| `API_KEYS` | **yes** | — | Comma-separated keys accepted by `/reviews` and `/api/reviews`; `.env.example` contains development-only placeholders |
+| `ADMIN_API_KEYS` | no | empty | Comma-separated keys with the `admin` scope required by `GET /api/reviews` (list all) |
+| `RATE_LIMIT_WINDOW_MS` | no | `60000` | Per-key rate-limit window in milliseconds |
+| `RATE_LIMIT_MAX` | no | `60` | Maximum authenticated review requests per key per window |
 | `REQUEST_BODY_LIMIT_BYTES` | no | `131072` | Express JSON body limit (128 KiB) |
 | `MAX_CONTENT_BYTES` | no | `65536` | Maximum UTF-8 byte length of `content` (64 KiB) |
 | `PROVIDER_TIMEOUT_MS` | no | `15000` | Per-attempt AI provider request timeout |
@@ -187,7 +191,8 @@ fails. `SIGINT`/`SIGTERM` close the HTTP server and disconnect Prisma cleanly.
 There is no build step and no application Docker image in this repository.
 A working `AI_API_KEY` is required for successful `POST /api/reviews` calls;
 without it, the route returns `502 AI_CONFIGURATION_ERROR` and stores a `FAILED`
-review. `POST /reviews` and `GET /health` work without AI credentials.
+review. Review endpoints also require an `API_KEYS` credential; `GET /health`
+needs no credentials. `POST /reviews` works without AI credentials.
 
 ## 9. API documentation
 
@@ -203,10 +208,15 @@ Summary (full request/response details, status codes and error catalogue in
 | `GET` | `/api/reviews?page=&limit=` | List reviews, newest first | 200 + pagination |
 | any | unknown path | Structured 404 | 404 |
 
+All review endpoints require an API key in `X-API-Key` or
+`Authorization: Bearer`; `GET /api/reviews` requires an `ADMIN_API_KEYS` key.
+Requests are rate limited per key. See [`docs/API.md`](docs/API.md).
+
 Example create (with AI configured):
 
 ```bash
 curl -i http://127.0.0.1:3000/api/reviews \
+  -H 'X-API-Key: dev-user-key' \
   -H 'Content-Type: application/json' \
   -d '{"content":"const apiKey = \"abcdef123456\";\neval(userInput);","sourceType":"SNIPPET","language":"JAVASCRIPT","options":{"includeStaticChecks":true}}'
 ```
@@ -366,9 +376,10 @@ passing.
 - **Validation and limits:** strict JSON schemas, 128 KiB request body limit and
   64 KiB source limit reduce oversized/malformed input risk. Database CHECK
   constraints guard persisted numeric fields.
-- **API limitations / risks:** there is **no authentication, authorization,
-  rate limiting or TLS** — the server binds to loopback by default and is not
-  production-hardened for public exposure. The development database uses
+- **API limitations / risks:** review endpoints use API-key authentication,
+  admin scope for list-all, and per-key rate limits; there is **no TLS** and
+  the server binds to loopback by default. Keep `HOST` internal unless traffic
+  is protected by a trusted proxy or gateway. The development database uses
   `trust` auth on loopback only. Redaction is heuristic, not a guarantee:
   redacted source is still sent to a third-party provider, so do not submit
   regulated data. Provider-side idempotency is best-effort. Submitted code is
@@ -381,8 +392,8 @@ Implemented today: the HTTP endpoints above, synchronous static + AI review
 with strict validation, safe persistence/serialization, provider retries and
 idempotency key, and an opt-in recovery service.
 
-Not implemented (candidates for future work): API authentication/rate limiting;
-a scheduled recovery worker, queue or CLI trigger; asynchronous review
+Not implemented (candidates for future work): JWT/SSO authentication or
+external rate-limit storage; a scheduled recovery worker, queue or CLI trigger; asynchronous review
 processing and status polling; static rules for Python/Go; AST-based analysis
 and cross-file review; update/delete endpoints, severity counts and other
 result analytics; an application Docker image or deployment configuration; API

@@ -1,13 +1,36 @@
 # CodeLens HTTP API reference
 
 Base URL in development: `http://127.0.0.1:3000`. All bodies are JSON
-(`Content-Type: application/json`). Responses are JSON. The API has no
-authentication, no CORS configuration, and no version prefix.
+(`Content-Type: application/json`). Responses are JSON. Review endpoints require
+an API key; `/health` is open. There is no CORS configuration, no TLS, and no
+version prefix.
 
 Every response carries `X-Request-Id`. If a request includes an `x-request-id`
 header matching `^[A-Za-z0-9_-]{1,64}$`, that value is reused; otherwise a UUID
 is generated. The same value appears in error bodies. Logs use a non-reversible
 8-character SHA-256 tag, never the raw ID.
+
+## Authentication and rate limits
+
+Every `/reviews` and `/api/reviews` request must present a configured API key
+in either `X-API-Key: <key>` or `Authorization: Bearer <key>`. Keys are configured
+through `API_KEYS`; a missing or unknown key returns `401 UNAUTHORIZED`. Raw keys
+are never logged: request identity is a truncated SHA-256 tag.
+
+`GET /api/reviews` (list all reviews) additionally requires a key from
+`ADMIN_API_KEYS`. A valid non-admin key returns `403 FORBIDDEN`.
+
+Authenticated review requests are rate limited per API key within
+`RATE_LIMIT_WINDOW_MS` (default 60,000 ms) to `RATE_LIMIT_MAX` requests (default
+60). Responses include `RateLimit-Limit`, `RateLimit-Remaining` and
+`RateLimit-Reset` headers; exceeding the budget returns `429 RATE_LIMITED`.
+
+```bash
+curl -i http://127.0.0.1:3000/api/reviews \
+  -H 'X-API-Key: dev-user-key' \
+  -H 'Content-Type: application/json' \
+  -d '{"content":"print(\"hello\")","sourceType":"SNIPPET","language":"PYTHON"}'
+```
 
 ## Endpoints
 
@@ -71,6 +94,7 @@ are rejected. The whole JSON body is limited to `REQUEST_BODY_LIMIT_BYTES`
 
 ```bash
 curl -i http://127.0.0.1:3000/reviews \
+  -H 'X-API-Key: dev-user-key' \
   -H 'Content-Type: application/json' \
   -d '{"content":"print(\"hello\")","sourceType":"SNIPPET","language":"PYTHON"}'
 ```
@@ -92,6 +116,7 @@ never returned.
 ### Errors
 
 - `400 VALIDATION_ERROR` — invalid body or malformed JSON (see error format below).
+- `401 UNAUTHORIZED`, `429 RATE_LIMITED` — authentication or rate-limit failure.
 
 ---
 
@@ -111,6 +136,7 @@ only; provider selection itself comes from the `AI_*` configuration.
 
 ```bash
 curl -i http://127.0.0.1:3000/api/reviews \
+  -H 'X-API-Key: dev-user-key' \
   -H 'Content-Type: application/json' \
   -d '{"content":"const apiKey = \"abcdef123456\";\neval(userInput);","sourceType":"SNIPPET","language":"JAVASCRIPT","options":{"includeStaticChecks":true}}'
 ```
@@ -208,6 +234,7 @@ traces appear in these objects.
 ### Errors
 
 - `400 VALIDATION_ERROR` — invalid submission.
+- `401 UNAUTHORIZED`, `429 RATE_LIMITED` — authentication or rate-limit failure.
 - `409 REVIEW_STATE_CONFLICT` or `409 MAX_ATTEMPTS_EXCEEDED` — state/attempt conflict.
 - `502 AI_*` — provider/authentication/rate-limit/timeout/invalid-response failures.
 - `500 DATABASE_ERROR` / `500 PROCESSING_FAILED` — whitelisted internal failures.
@@ -236,12 +263,14 @@ show `status: "FAILED"`, `errorCode: "AI_AUTHENTICATION_FAILED"`, an empty
 Path parameter `id` must be a UUID.
 
 ```bash
-curl -i http://127.0.0.1:3000/api/reviews/84db23e2-ccf7-4f8d-a256-ea3fe18c8c69
+curl -i http://127.0.0.1:3000/api/reviews/84db23e2-ccf7-4f8d-a256-ea3fe18c8c69 \
+  -H 'X-API-Key: dev-user-key'
 ```
 
 Returns `200 OK` with the same review object shape as above. Errors:
 
 - `400 VALIDATION_ERROR` with `details[0].path = "id"` — malformed UUID.
+- `401 UNAUTHORIZED`, `429 RATE_LIMITED` — authentication or rate-limit failure.
 - `404 REVIEW_NOT_FOUND` — well-formed UUID that does not exist.
 
 ```json
@@ -269,7 +298,8 @@ Results are ordered by `createdAt` descending. Pagination metadata is computed
 from the total row count.
 
 ```bash
-curl -i 'http://127.0.0.1:3000/api/reviews?page=2&limit=2'
+curl -i 'http://127.0.0.1:3000/api/reviews?page=2&limit=2' \
+  -H 'X-API-Key: dev-admin-key'
 ```
 
 ```json
@@ -285,7 +315,8 @@ curl -i 'http://127.0.0.1:3000/api/reviews?page=2&limit=2'
 ```
 
 `400 VALIDATION_ERROR` is returned for `page=0`, `limit=101`, `limit=0`,
-non-numeric values, or unknown query keys.
+non-numeric values, or unknown query keys. `401 UNAUTHORIZED`, `403 FORBIDDEN`
+(non-admin key), and `429 RATE_LIMITED` are also possible.
 
 ---
 
@@ -314,7 +345,10 @@ and code `INTERNAL_ERROR`; their details are only in server logs.
 | Status | Codes |
 |---|---|
 | 400 | `VALIDATION_ERROR` |
+| 401 | `UNAUTHORIZED` |
+| 403 | `FORBIDDEN` |
 | 404 | `NOT_FOUND`, `REVIEW_NOT_FOUND` |
+| 429 | `RATE_LIMITED` |
 | 409 | `REVIEW_STATE_CONFLICT`, `MAX_ATTEMPTS_EXCEEDED` |
 | 502 | `AI_PROVIDER_ERROR`, `AI_CONFIGURATION_ERROR`, `AI_AUTHENTICATION_FAILED`, `AI_RATE_LIMITED`, `AI_TIMEOUT`, `AI_UNAVAILABLE`, `AI_INVALID_RESPONSE` |
 | 500 | `DATABASE_ERROR`, `PROCESSING_FAILED`, `INTERNAL_ERROR` |

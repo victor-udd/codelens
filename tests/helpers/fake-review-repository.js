@@ -129,9 +129,10 @@ export class FakeReviewRepository {
     const review = this.reviews.get(id);
     const eligible =
       review &&
-      ['PENDING', 'PROCESSING'].includes(review.status) &&
-      (!data.expectedProcessingStartedAt ||
-        sameInstant(review.processingStartedAt, data.expectedProcessingStartedAt));
+      (data.expectedProcessingStartedAt
+        ? review.status === 'PROCESSING' &&
+          sameInstant(review.processingStartedAt, data.expectedProcessingStartedAt)
+        : review.status === 'PENDING');
 
     if (!eligible) {
       return { count: 0, review: review ? { ...review } : null };
@@ -143,7 +144,14 @@ export class FakeReviewRepository {
       completedAt: data.completedAt,
       updatedAt: this.now(),
     });
+    this.clearArtifacts(id);
     return { count: 1, review: { ...review } };
+  }
+
+  clearArtifacts(id) {
+    this.resultRows.delete(id);
+    this.findingRows.delete(id);
+    this.results.delete(id);
   }
 
   withArtifacts(review) {
@@ -204,6 +212,7 @@ export class FakeReviewRepository {
       model: bounds.model ?? review.model,
       updatedAt: this.now(),
     });
+    this.clearArtifacts(id);
 
     return this.withArtifacts(review);
   }

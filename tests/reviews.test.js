@@ -2,6 +2,16 @@ import { describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
 
+const USER_KEY = 'test-user-key';
+
+function authed(app) {
+  const http = request(app);
+  return {
+    get: (path) => http.get(path).set('x-api-key', USER_KEY),
+    post: (path) => http.post(path).set('x-api-key', USER_KEY),
+  };
+}
+
 describe('review submission endpoint', () => {
   const app = createApp();
 
@@ -15,7 +25,7 @@ describe('review submission endpoint', () => {
   }
 
   it('accepts a valid submission without echoing the source', async () => {
-    const response = await request(app)
+    const response = await authed(app)
       .post('/reviews')
       .send(validSubmission());
 
@@ -30,7 +40,7 @@ describe('review submission endpoint', () => {
   });
 
   it('returns a structured validation error for an invalid body', async () => {
-    const response = await request(app)
+    const response = await authed(app)
       .post('/reviews')
       .send({ content: '', sourceType: 'SNIPPET', language: 'RUST' });
 
@@ -46,7 +56,7 @@ describe('review submission endpoint', () => {
   });
 
   it('validates submissions on the API-prefixed route too', async () => {
-    const response = await request(app)
+    const response = await authed(app)
       .post('/api/reviews')
       .send(validSubmission({ sourceType: 'INVALID' }));
 
@@ -55,7 +65,7 @@ describe('review submission endpoint', () => {
   });
 
   it('returns a validation error for malformed JSON', async () => {
-    const response = await request(app)
+    const response = await authed(app)
       .post('/reviews')
       .set('Content-Type', 'application/json')
       .send('{"content":');
@@ -65,7 +75,7 @@ describe('review submission endpoint', () => {
   });
 
   it('rejects unexpected fields before any processing', async () => {
-    const response = await request(app)
+    const response = await authed(app)
       .post('/reviews')
       .send(validSubmission({ source: 'secret' }));
 

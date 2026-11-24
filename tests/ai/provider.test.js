@@ -1,3 +1,4 @@
+import { createServer } from 'node:http';
 import { describe, expect, it, vi } from 'vitest';
 import {
   AIAuthenticationError,
@@ -24,6 +25,7 @@ function makeProvider(overrides = {}) {
     model: 'test-model',
     baseUrl: 'https://provider.example/v1',
     timeoutMs: 1000,
+    maxTokens: 4096,
     fetchImpl,
     ...overrides,
   });
@@ -58,6 +60,7 @@ describe('OpenAI-compatible provider', () => {
     expect(body.model).toBe('test-model');
     expect(body.temperature).toBe(0);
     expect(body.response_format).toEqual({ type: 'json_object' });
+    expect(body.max_tokens).toBe(4096);
     expect(body).not.toHaveProperty('tools');
     expect(body).not.toHaveProperty('tool_choice');
     expect(body.messages[0].content).toContain('untrusted data');
@@ -98,6 +101,67 @@ describe('OpenAI-compatible provider', () => {
     await expect(
       provider.generate({ systemPrompt: 's', userPayload: '{}' }),
     ).rejects.toBeInstanceOf(AITimeoutError);
+  });
+
+  it('enforces the timeout while the response body is stalled', async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      // Headers arrive immediately, but the body never completes.
+      response.write('{"choices":[');
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address();
+    const provider = createOpenAICompatibleProvider({
+      apiKey: 'test-only-key',
+      model: 'test-model',
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      timeoutMs: 50,
+    });
+
+    const outcome = await Promise.race([
+      provider
+        .generate({ systemPrompt: 's', userPayload: '{}' })
+        .then(() => 'resolved', (error) => error),
+      new Promise((resolve) => {
+        setTimeout(() => resolve('STILL_PENDING'), 1000);
+      }),
+    ]);
+
+    try {
+      expect(outcome).toBeInstanceOf(AITimeoutError);
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  }, 3000);
+
+  it('rejects a provider response body larger than the configured limit', async () => {
+    const body = JSON.stringify(validEnvelope('x'.repeat(2048)));
+    const server = createServer((_request, response) => {
+      response.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+      });
+      response.end(body);
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address();
+    const provider = createOpenAICompatibleProvider({
+      apiKey: 'test-only-key',
+      model: 'test-model',
+      baseUrl: `http://127.0.0.1:${port}/v1`,
+      maxResponseBytes: 1024,
+      timeoutMs: 1000,
+    });
+
+    try {
+      await expect(
+        provider.generate({ systemPrompt: 's', userPayload: '{}' }),
+      ).rejects.toBeInstanceOf(AIInvalidResponseError);
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 
   it('maps network failures to an unavailable error', async () => {

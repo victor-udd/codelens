@@ -17,6 +17,8 @@ export function resolveAIConfig(env = process.env) {
     baseUrl: firstNonEmpty(env.AI_BASE_URL, env.OPENAI_BASE_URL, appConfig.AI_BASE_URL),
     timeoutMs: appConfig.PROVIDER_TIMEOUT_MS,
     maxAttempts: appConfig.MAX_PROVIDER_ATTEMPTS,
+    maxTokens: appConfig.AI_MAX_OUTPUT_TOKENS,
+    maxResponseBytes: appConfig.AI_RESPONSE_MAX_BYTES,
   };
 }
 

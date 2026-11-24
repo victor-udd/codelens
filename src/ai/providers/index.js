@@ -23,6 +23,8 @@ export function createProvider(options = {}) {
     model: resolved.model,
     baseUrl: resolved.baseUrl,
     timeoutMs: resolved.timeoutMs,
+    maxTokens: resolved.maxTokens,
+    maxResponseBytes: resolved.maxResponseBytes,
     fetchImpl: options.fetchImpl,
   });
 }
