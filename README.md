@@ -88,7 +88,7 @@ persist or analyse anything.
 
 ## 4. Prerequisites
 
-- Node.js **>= 22.9.0** and a compatible npm (version 26.13.1 / npm 11 were used here).
+- Node.js **>= 22.9.0** and a compatible npm (version 26.13.1 / npm 12.2.2 were used here).
 - Git.
 - A running Docker engine with Compose v2 (Docker Desktop works). The Compose
   service publishes loopback port **55432**; it must be free.
@@ -133,6 +133,8 @@ a variable is absent.
 | `MAX_CONTENT_BYTES` | no | `65536` | Maximum UTF-8 byte length of `content` (64 KiB) |
 | `PROVIDER_TIMEOUT_MS` | no | `15000` | Per-attempt AI provider request timeout |
 | `MAX_PROVIDER_ATTEMPTS` | no | `3` | Provider attempts per review (1–10); retryable failures only |
+| `AI_MAX_OUTPUT_TOKENS` | no | `4096` | Maximum `max_tokens` sent to the provider |
+| `AI_RESPONSE_MAX_BYTES` | no | `1048576` | Maximum provider response body size (1 MiB) |
 | `MAX_PROCESSING_ATTEMPTS` | no | `3` | Review-level attempt limit (1–10) before terminal failure |
 | `STALE_PROCESSING_MS` | no | `90000` | Age after which `PROCESSING` reviews are stale |
 | `STALE_PENDING_MS` | no | `300000` | Age after which `PENDING` reviews are stale |
@@ -360,7 +362,7 @@ Vitest runs in the `node` environment with `NODE_ENV=test` and
 adapters and a fake repository (`tests/helpers/`) and need no services;
 `tests/database.test.js` is the live PostgreSQL integration suite, so start the
 database first (`npm run db:start && npm run db:deploy`). No live third-party
-provider is contacted by the tests. Current baseline: 14 files / 112 tests
+provider is contacted by the tests. Current baseline: 17 files / 146 tests
 passing.
 
 ## 14. Security and data handling
